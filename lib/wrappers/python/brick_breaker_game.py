@@ -1,0 +1,443 @@
+#!/usr/bin/env python3
+"""
+Brick Breaker for ContourWallEmulator.
+
+Controls:
+- Move: Left/Right arrows or A/D
+- Quit: Q or ESC
+- Restart after game over: R
+
+Physical mode:
+- Start with --physical
+- Move your hand/body left-right in front of a webcam
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+import random
+import sys
+import time
+
+import cv2 as cv
+import numpy as np
+try:
+    import mediapipe as mp
+except ImportError:
+    mp = None
+
+EXAMPLES_DIR = Path(__file__).resolve().parent
+if str(EXAMPLES_DIR) not in sys.path:
+    sys.path.insert(0, str(EXAMPLES_DIR))
+
+WRAPPER_DIR = EXAMPLES_DIR.parent
+if str(WRAPPER_DIR) not in sys.path:
+    sys.path.insert(0, str(WRAPPER_DIR))
+
+from contourwall_emulator import ContourWallEmulator
+from game_input import LEFT_KEYS, RIGHT_KEYS, PhysicalMotionController, normalize_key
+
+
+class PoseController:
+    def __init__(self, camera_index=0, show_window=False):
+        self.show_window = show_window
+        if cv is None or mp is None or not hasattr(mp, "solutions"):
+            raise RuntimeError("MediaPipe Pose is unavailable.")
+        if sys.platform.startswith("win"):
+            self.cap = cv.VideoCapture(camera_index, cv.CAP_DSHOW)
+        else:
+            self.cap = cv.VideoCapture(camera_index)
+        if not self.cap.isOpened():
+            raise RuntimeError("Camera failed to open.")
+        self.cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+        self.pose = mp.solutions.pose.Pose(
+            static_image_mode=False,
+            model_complexity=1,
+            min_detection_confidence=0.3,
+            min_tracking_confidence=0.3,
+        )
+
+    def read_key(self):
+        if not self.show_window or cv is None:
+            return -1
+        return normalize_key(cv.waitKey(1))
+
+    def read_target_col(self, cols):
+        ret, frame = self.cap.read()
+        if not ret:
+            return None
+        frame = cv.flip(frame, 1)
+        rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+        results = self.pose.process(rgb)
+        if self.show_window:
+            cv.imshow("Camera", frame)
+        if not results.pose_landmarks:
+            return None
+
+        lm = results.pose_landmarks.landmark
+        xs = [
+            lm[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER].x,
+            lm[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER].x,
+            lm[mp.solutions.pose.PoseLandmark.LEFT_HIP].x,
+            lm[mp.solutions.pose.PoseLandmark.RIGHT_HIP].x,
+        ]
+        avg_x = sum(xs) / len(xs)
+        return int(max(0, min(cols - 1, round(avg_x * (cols - 1)))))
+
+    def close(self):
+        if self.cap is not None:
+            self.cap.release()
+        if self.pose is not None:
+            self.pose.close()
+        if self.show_window and cv is not None:
+            cv.destroyAllWindows()
+
+
+@dataclass
+class Brick:
+    x0: int
+    x1: int
+    y: int
+    color: tuple[int, int, int]
+
+
+class BrickBreakerGame:
+    def __init__(
+        self,
+        wall: ContourWallEmulator,
+        motion_controller: PhysicalMotionController | None = None,
+    ):
+        self.cw = wall
+        self.motion_controller = motion_controller
+        self.use_physical_input = motion_controller is not None
+
+        self.rows, self.cols = wall.pixels.shape[:2]
+        self.paddle_width = max(7, self.cols // 9)
+        self.paddle_row = self.rows - 3
+
+        self.paddle_x = 0.0
+        self.ball_x = 0.0
+        self.ball_y = 0.0
+        self.ball_vx = 0.0
+        self.ball_vy = 0.0
+
+        self.bricks: list[Brick] = []
+        self.score = 0
+        self.lives = 3
+        self.level = 1
+        self.frame = 0
+
+    def reset_game(self) -> None:
+        self.score = 0
+        self.lives = 3
+        self.level = 1
+        self.frame = 0
+        self._start_level(self.level)
+
+    def _start_level(self, level: int) -> None:
+        self.level = level
+        self._create_bricks(level)
+        self.paddle_x = (self.cols - self.paddle_width) / 2
+        self._reset_ball()
+
+    def _create_bricks(self, level: int) -> None:
+        row_count = min(7, 4 + max(0, level - 1))
+        brick_w = max(4, self.cols // 13)
+        gap = 1
+        col_count = max(6, self.cols // (brick_w + gap))
+        total_w = col_count * brick_w + (col_count - 1) * gap
+        x_start = max(0, (self.cols - total_w) // 2)
+        palette = [
+            (230, 90, 35),
+            (220, 160, 35),
+            (80, 220, 90),
+            (45, 160, 240),
+            (155, 120, 245),
+            (245, 120, 210),
+        ]
+
+        self.bricks.clear()
+        for row in range(row_count):
+            y = 2 + (row * 2)
+            if y >= self.paddle_row - 3:
+                break
+            color = palette[row % len(palette)]
+            for i in range(col_count):
+                x0 = x_start + i * (brick_w + gap)
+                x1 = min(self.cols - 1, x0 + brick_w - 1)
+                self.bricks.append(Brick(x0=x0, x1=x1, y=y, color=color))
+
+    def _reset_ball(self) -> None:
+        self.ball_x = self.paddle_x + (self.paddle_width / 2)
+        self.ball_y = self.paddle_row - 1.2
+        speed = 1.05 + (self.level * 0.06)
+        vx_seed = random.choice([-0.85, -0.7, 0.7, 0.85])
+        self.ball_vx = vx_seed
+        self.ball_vy = -max(0.75, speed - abs(vx_seed) * 0.35)
+
+    def _process_input(self, key: int, physical_target_col: int | None) -> bool:
+        key = normalize_key(key)
+        if key in (27, ord("q"), ord("Q")):
+            return False
+
+        if self.use_physical_input and physical_target_col is not None:
+            target_left = float(
+                np.clip(
+                    physical_target_col - (self.paddle_width / 2),
+                    0,
+                    self.cols - self.paddle_width,
+                )
+            )
+            self.paddle_x += float(np.clip(target_left - self.paddle_x, -2.6, 2.6))
+            return True
+
+        if key in LEFT_KEYS or key in (ord("a"), ord("A")):
+            self.paddle_x -= 2.2
+        elif key in RIGHT_KEYS or key in (ord("d"), ord("D")):
+            self.paddle_x += 2.2
+
+        self.paddle_x = float(np.clip(self.paddle_x, 0, self.cols - self.paddle_width))
+        return True
+
+    def _update_ball(self) -> None:
+        next_x = self.ball_x + self.ball_vx
+        next_y = self.ball_y + self.ball_vy
+
+        if next_x <= 0:
+            next_x = 0
+            self.ball_vx = abs(self.ball_vx)
+        elif next_x >= self.cols - 1:
+            next_x = self.cols - 1
+            self.ball_vx = -abs(self.ball_vx)
+
+        if next_y <= 2:
+            next_y = 2
+            self.ball_vy = abs(self.ball_vy)
+
+        # Paddle collision.
+        if self.ball_vy > 0 and (self.paddle_row - 1.2) <= next_y <= (self.paddle_row + 1.2):
+            if (self.paddle_x - 0.4) <= next_x <= (self.paddle_x + self.paddle_width + 0.4):
+                hit_offset = (
+                    next_x - (self.paddle_x + self.paddle_width / 2)
+                ) / max(1.0, self.paddle_width / 2)
+                hit_offset = float(np.clip(hit_offset, -1.0, 1.0))
+
+                base_speed = min(2.4, 1.05 + self.level * 0.09 + self.score / 1400)
+                self.ball_vx = float(np.clip(hit_offset * 1.45, -1.35, 1.35))
+                self.ball_vy = -max(0.78, base_speed - abs(self.ball_vx) * 0.30)
+                next_y = self.paddle_row - 1.25
+
+        # Brick collision.
+        hit_idx = -1
+        for idx, brick in enumerate(self.bricks):
+            if brick.x0 <= next_x <= brick.x1 and brick.y <= next_y <= (brick.y + 1):
+                hit_idx = idx
+                break
+
+        if hit_idx != -1:
+            self.bricks.pop(hit_idx)
+            self.score += 12 + (self.level * 2)
+            self.ball_vy *= -1
+            speed_scale = 1.01
+            self.ball_vx *= speed_scale
+            self.ball_vy *= speed_scale
+            self.ball_vx = float(np.clip(self.ball_vx, -1.45, 1.45))
+            self.ball_vy = float(np.clip(self.ball_vy, -1.85, 1.85))
+            next_y = self.ball_y + self.ball_vy
+
+        self.ball_x = next_x
+        self.ball_y = next_y
+
+        if self.ball_y >= self.rows - 1:
+            self.lives -= 1
+            if self.lives > 0:
+                self._reset_ball()
+
+    def _draw_hud(self) -> None:
+        for i in range(self.lives):
+            start = i * 3
+            self.cw.pixels[0, start:start + 2] = (35, 225, 35)
+
+        score_width = min(self.cols, self.score // 14)
+        if score_width > 0:
+            self.cw.pixels[1, self.cols - score_width:self.cols] = (240, 170, 45)
+
+        level_width = min(self.cols // 2, self.level * 4)
+        if level_width > 0:
+            self.cw.pixels[1, 0:level_width] = (80, 140, 250)
+
+    def _draw_digit(self, digit: int) -> None:
+        patterns = {
+            0: ["111", "101", "101", "101", "111"],
+            1: ["010", "110", "010", "010", "111"],
+            2: ["111", "001", "111", "100", "111"],
+            3: ["111", "001", "111", "001", "111"],
+            4: ["101", "101", "111", "001", "001"],
+            5: ["111", "100", "111", "001", "111"],
+            6: ["111", "100", "111", "101", "111"],
+            7: ["111", "001", "001", "001", "001"],
+            8: ["111", "101", "111", "101", "111"],
+            9: ["111", "101", "111", "001", "111"],
+        }
+        pattern = patterns.get(digit)
+        if pattern is None:
+            return
+        start_row = max(0, (self.rows // 2) - 2)
+        start_col = max(0, (self.cols // 2) - 1)
+        self.cw.fill_solid(0, 0, 0)
+        for r, row in enumerate(pattern):
+            for c, ch in enumerate(row):
+                if ch == "1":
+                    self.cw.pixels[start_row + r, start_col + c] = (80, 140, 250)
+
+    def _render(self) -> None:
+        self.cw.pixels[:] = (6, 10, 18)
+
+        for i in range(16):
+            row = (self.frame + i * 7) % self.rows
+            col = (i * 9 + self.frame // 2) % self.cols
+            if row > 1:
+                self.cw.pixels[row, col] = (16, 24, 38)
+
+        for brick in self.bricks:
+            self.cw.pixels[brick.y:brick.y + 2, brick.x0:brick.x1 + 1] = brick.color
+
+        px0 = int(round(self.paddle_x))
+        px1 = int(np.clip(px0 + self.paddle_width, 0, self.cols))
+        self.cw.pixels[self.paddle_row:self.paddle_row + 2, px0:px1] = (250, 235, 115)
+
+        bx = int(np.clip(round(self.ball_x), 0, self.cols - 1))
+        by = int(np.clip(round(self.ball_y), 2, self.rows - 1))
+        self.cw.pixels[by, bx] = (245, 245, 245)
+
+        self._draw_hud()
+
+    def _wait_for_restart_or_quit(self) -> bool:
+        print(f"Game over. Final score: {self.score}. Press R to restart or Q to quit.")
+        flash = False
+        while True:
+            flash = not flash
+            if flash:
+                self.cw.fill_solid(6, 6, 20)
+            else:
+                self.cw.fill_solid(0, 0, 0)
+            key = normalize_key(self.cw.show(sleep_ms=220))
+            if key in (27, ord("q"), ord("Q")):
+                return False
+            if key in (ord("r"), ord("R")):
+                return True
+
+            if self.motion_controller is not None:
+                self.motion_controller.read_target_col(self.cols)
+                camera_key = normalize_key(self.motion_controller.read_key())
+                if camera_key in (27, ord("q"), ord("Q")):
+                    return False
+                if camera_key in (ord("r"), ord("R")):
+                    return True
+
+    def run(self) -> None:
+        print("Brick Breaker")
+        if self.use_physical_input:
+            print("Physical mode enabled: move left-right in front of your webcam.")
+        else:
+            print("Move paddle with Left/Right or A/D.")
+        print("Press Q or ESC to quit.")
+
+        print("Starting in 5...")
+        for count in range(5, 0, -1):
+            self._draw_digit(count)
+            self.cw.show(sleep_ms=1000)
+
+        running = True
+        while running:
+            self.reset_game()
+            key = -1
+
+            while self.lives > 0:
+                frame_start = time.perf_counter()
+                self.frame += 1
+
+                physical_target_col = None
+                if self.motion_controller is not None:
+                    physical_target_col = self.motion_controller.read_target_col(self.cols)
+                    camera_key = normalize_key(self.motion_controller.read_key())
+                    if camera_key in (27, ord("q"), ord("Q")):
+                        return
+
+                if not self._process_input(key, physical_target_col):
+                    return
+
+                self._update_ball()
+                if not self.bricks:
+                    self._start_level(self.level + 1)
+
+                self._render()
+                key = self.cw.show()
+
+                frame_time = time.perf_counter() - frame_start
+                target_dt = 0.038  # ~26 FPS
+                if frame_time < target_dt:
+                    time.sleep(target_dt - frame_time)
+
+            running = self._wait_for_restart_or_quit()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Brick Breaker for ContourWallEmulator.")
+    parser.add_argument(
+        "--physical",
+        action="store_true",
+        help="Use webcam motion as physical paddle input.",
+    )
+    parser.add_argument(
+        "--camera-index",
+        type=int,
+        default=0,
+        help="OpenCV camera index for --physical mode (default: 0).",
+    )
+    parser.add_argument(
+        "--show-camera",
+        action="store_true",
+        help="Show webcam debug windows in --physical mode.",
+    )
+    args = parser.parse_args()
+
+    random.seed()
+    cw = ContourWallEmulator()
+    cw.new_with_ports("COM10", "COM12", "COM9", "COM14", "COM13", "COM11")
+
+    motion_controller: PhysicalMotionController | None = None
+    if args.physical:
+        try:
+            motion_controller = PoseController(
+                camera_index=args.camera_index,
+                show_window=args.show_camera,
+            )
+        except RuntimeError as exc:
+            print(f"[INPUT WARN] {exc}")
+            print("[INPUT WARN] Falling back to motion input.")
+            try:
+                motion_controller = PhysicalMotionController(
+                    camera_index=args.camera_index,
+                    show_window=args.show_camera,
+                )
+            except RuntimeError as inner_exc:
+                print(f"[INPUT WARN] {inner_exc}")
+                print("[INPUT WARN] Falling back to keyboard input.")
+
+    game = BrickBreakerGame(cw, motion_controller=motion_controller)
+    try:
+        game.run()
+    finally:
+        if motion_controller is not None:
+            motion_controller.close()
+        cw.fill_solid(0, 0, 0)
+        cw.show()
+        cv.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
