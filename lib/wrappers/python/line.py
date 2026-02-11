@@ -38,6 +38,7 @@ from game_input import (
 	PhysicalMotionController,
 	normalize_key,
 )
+from lives_display import draw_lives
 
 
 @dataclass
@@ -133,9 +134,7 @@ class LaneStayGame:
 		player_col = lane_cols[self.lane_state.current]
 		self.cw.pixels[self.player_row:self.player_row + 2, player_col:player_col + 2] = (255, 220, 80)
 
-		for i in range(self.lives):
-			start = i * 3
-			self.cw.pixels[0, start:start + 2] = (230, 60, 60)
+		draw_lives(self.cw, self.lives)
 
 		score_width = min(self.cols, self.score)
 		if score_width > 0:

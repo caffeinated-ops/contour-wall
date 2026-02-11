@@ -38,6 +38,7 @@ if str(WRAPPER_DIR) not in sys.path:
 
 from contourwall_emulator import ContourWallEmulator
 from game_input import LEFT_KEYS, RIGHT_KEYS, PhysicalMotionController, normalize_key
+from highscore_board import HighscoreBoard, highscore_path
 
 
 class PoseController:
@@ -105,6 +106,48 @@ class Brick:
 
 
 class BrickBreakerGame:
+    DIGIT_PATTERNS = {
+        "0": ["111", "101", "101", "101", "111"],
+        "1": ["010", "110", "010", "010", "111"],
+        "2": ["111", "001", "111", "100", "111"],
+        "3": ["111", "001", "111", "001", "111"],
+        "4": ["101", "101", "111", "001", "001"],
+        "5": ["111", "100", "111", "001", "111"],
+        "6": ["111", "100", "111", "101", "111"],
+        "7": ["111", "001", "001", "001", "001"],
+        "8": ["111", "101", "111", "101", "111"],
+        "9": ["111", "101", "111", "001", "111"],
+    }
+    CHAR_PATTERNS = {
+        "A": ["010", "101", "111", "101", "101"],
+        "B": ["110", "101", "110", "101", "110"],
+        "C": ["011", "100", "100", "100", "011"],
+        "D": ["110", "101", "101", "101", "110"],
+        "E": ["111", "100", "110", "100", "111"],
+        "F": ["111", "100", "110", "100", "100"],
+        "G": ["011", "100", "101", "101", "011"],
+        "H": ["101", "101", "111", "101", "101"],
+        "I": ["111", "010", "010", "010", "111"],
+        "J": ["001", "001", "001", "101", "010"],
+        "K": ["101", "110", "100", "110", "101"],
+        "L": ["100", "100", "100", "100", "111"],
+        "M": ["101", "111", "111", "101", "101"],
+        "N": ["101", "111", "111", "101", "101"],
+        "O": ["111", "101", "101", "101", "111"],
+        "P": ["110", "101", "110", "100", "100"],
+        "Q": ["111", "101", "101", "111", "001"],
+        "R": ["110", "101", "110", "101", "101"],
+        "S": ["011", "100", "111", "001", "110"],
+        "T": ["111", "010", "010", "010", "010"],
+        "U": ["101", "101", "101", "101", "111"],
+        "V": ["101", "101", "101", "101", "010"],
+        "W": ["101", "101", "111", "111", "101"],
+        "X": ["101", "101", "010", "101", "101"],
+        "Y": ["101", "101", "010", "010", "010"],
+        "Z": ["111", "001", "010", "100", "111"],
+        "_": ["000", "000", "000", "000", "111"],
+    }
+
     def __init__(
         self,
         wall: ContourWallEmulator,
@@ -129,6 +172,22 @@ class BrickBreakerGame:
         self.lives = 3
         self.level = 1
         self.frame = 0
+        self.highscore_path = highscore_path(EXAMPLES_DIR, "brick_breaker")
+        self.highscores: list[tuple[str, int]] = []
+        self.last_initials = "YOU"
+        self.highscore_board = HighscoreBoard(self.rows, self.cols, self.cw.pixels)
+        self.highscores = self.highscore_board.load(self.highscore_path)
+
+    def _record_highscore(self) -> None:
+        self.last_initials, self.highscores = self.highscore_board.record(
+            self.highscores,
+            self.score,
+            self.last_initials,
+            path=self.highscore_path,
+        )
+
+    def _draw_highscores(self, flash: bool) -> None:
+        self.highscore_board.draw(self.highscores, self.last_initials, self.score, flash)
 
     def reset_game(self) -> None:
         self.score = 0
@@ -203,6 +262,8 @@ class BrickBreakerGame:
         return True
 
     def _update_ball(self) -> None:
+        prev_x = self.ball_x
+        prev_y = self.ball_y
         next_x = self.ball_x + self.ball_vx
         next_y = self.ball_y + self.ball_vy
 
@@ -217,8 +278,9 @@ class BrickBreakerGame:
             next_y = 2
             self.ball_vy = abs(self.ball_vy)
 
-        # Paddle collision.
-        if self.ball_vy > 0 and (self.paddle_row - 1.2) <= next_y <= (self.paddle_row + 1.2):
+        # Paddle collision: only bounce when crossing the paddle plane from above.
+        paddle_y = self.paddle_row - 1.2
+        if self.ball_vy > 0 and prev_y < paddle_y <= next_y:
             if (self.paddle_x - 0.4) <= next_x <= (self.paddle_x + self.paddle_width + 0.4):
                 hit_offset = (
                     next_x - (self.paddle_x + self.paddle_width / 2)
@@ -230,17 +292,39 @@ class BrickBreakerGame:
                 self.ball_vy = -max(0.78, base_speed - abs(self.ball_vx) * 0.30)
                 next_y = self.paddle_row - 1.25
 
-        # Brick collision.
+        # Brick collision: detect entry side to reduce jittery bounces.
         hit_idx = -1
+        hit_axis = "y"
         for idx, brick in enumerate(self.bricks):
-            if brick.x0 <= next_x <= brick.x1 and brick.y <= next_y <= (brick.y + 1):
-                hit_idx = idx
-                break
+            inside_next = brick.x0 <= next_x <= brick.x1 and brick.y <= next_y <= (brick.y + 1)
+            if not inside_next:
+                continue
+
+            enter_from_top = prev_y < brick.y <= next_y
+            enter_from_bottom = prev_y > (brick.y + 1) >= next_y
+            enter_from_left = prev_x < brick.x0 <= next_x
+            enter_from_right = prev_x > brick.x1 >= next_x
+
+            if enter_from_left or enter_from_right:
+                hit_axis = "x"
+            elif enter_from_top or enter_from_bottom:
+                hit_axis = "y"
+            else:
+                # Fallback: pick axis with smaller overlap
+                dx = min(abs(next_x - brick.x0), abs(next_x - brick.x1))
+                dy = min(abs(next_y - brick.y), abs(next_y - (brick.y + 1)))
+                hit_axis = "x" if dx < dy else "y"
+
+            hit_idx = idx
+            break
 
         if hit_idx != -1:
             self.bricks.pop(hit_idx)
             self.score += 12 + (self.level * 2)
-            self.ball_vy *= -1
+            if hit_axis == "x":
+                self.ball_vx *= -1
+            else:
+                self.ball_vy *= -1
             speed_scale = 1.01
             self.ball_vx *= speed_scale
             self.ball_vy *= speed_scale
@@ -261,37 +345,95 @@ class BrickBreakerGame:
             start = i * 3
             self.cw.pixels[0, start:start + 2] = (35, 225, 35)
 
-        score_width = min(self.cols, self.score // 14)
-        if score_width > 0:
-            self.cw.pixels[1, self.cols - score_width:self.cols] = (240, 170, 45)
-
         level_width = min(self.cols // 2, self.level * 4)
         if level_width > 0:
             self.cw.pixels[1, 0:level_width] = (80, 140, 250)
 
+        self._draw_number(
+            value=self.score,
+            top_row=0,
+            right_col=self.cols - 1,
+            color=(245, 245, 245),
+        )
+
     def _draw_digit(self, digit: int) -> None:
-        patterns = {
-            0: ["111", "101", "101", "101", "111"],
-            1: ["010", "110", "010", "010", "111"],
-            2: ["111", "001", "111", "100", "111"],
-            3: ["111", "001", "111", "001", "111"],
-            4: ["101", "101", "111", "001", "001"],
-            5: ["111", "100", "111", "001", "111"],
-            6: ["111", "100", "111", "101", "111"],
-            7: ["111", "001", "001", "001", "001"],
-            8: ["111", "101", "111", "101", "111"],
-            9: ["111", "101", "111", "001", "111"],
-        }
-        pattern = patterns.get(digit)
-        if pattern is None:
+        if digit < 0 or digit > 9:
             return
         start_row = max(0, (self.rows // 2) - 2)
         start_col = max(0, (self.cols // 2) - 1)
         self.cw.fill_solid(0, 0, 0)
-        for r, row in enumerate(pattern):
-            for c, ch in enumerate(row):
-                if ch == "1":
-                    self.cw.pixels[start_row + r, start_col + c] = (80, 140, 250)
+        right_col = min(self.cols - 1, start_col + 2)
+        self._draw_number(
+            value=digit,
+            top_row=start_row,
+            right_col=right_col,
+            color=(80, 140, 250),
+        )
+
+    def _draw_number(
+        self,
+        value: int,
+        top_row: int,
+        right_col: int,
+        color: tuple[int, int, int],
+    ) -> None:
+        if top_row < 0 or top_row + 5 > self.rows:
+            return
+
+        text = str(max(0, value))
+        digit_w = 3
+        gap = 1
+        total_w = len(text) * digit_w + (len(text) - 1) * gap
+        left_col = right_col - total_w + 1
+        if left_col < 0:
+            # Trim the left-most digits if we cannot fit the full score.
+            overflow = -left_col
+            trim_digits = (overflow + digit_w + gap - 1) // (digit_w + gap)
+            text = text[trim_digits:]
+            total_w = len(text) * digit_w + (len(text) - 1) * gap
+            left_col = right_col - total_w + 1
+            if left_col < 0:
+                return
+
+        cursor = left_col
+        for ch in text:
+            pattern = self.DIGIT_PATTERNS.get(ch)
+            if pattern is None:
+                cursor += digit_w + gap
+                continue
+            for r, row in enumerate(pattern):
+                for c, cell in enumerate(row):
+                    if cell == "1":
+                        self.cw.pixels[top_row + r, cursor + c] = color
+            cursor += digit_w + gap
+
+    def _draw_text(
+        self,
+        text: str,
+        top_row: int,
+        left_col: int,
+        color: tuple[int, int, int],
+    ) -> None:
+        if top_row < 0 or top_row + 5 > self.rows:
+            return
+        if left_col >= self.cols:
+            return
+
+        digit_w = 3
+        gap = 1
+        cursor = left_col
+        for ch in text.upper():
+            if cursor + digit_w > self.cols:
+                break
+            pattern = self.CHAR_PATTERNS.get(ch)
+            if pattern is None:
+                cursor += digit_w + gap
+                continue
+            for r, row in enumerate(pattern):
+                for c, cell in enumerate(row):
+                    if cell == "1":
+                        self.cw.pixels[top_row + r, cursor + c] = color
+            cursor += digit_w + gap
 
     def _render(self) -> None:
         self.cw.pixels[:] = (6, 10, 18)
@@ -317,6 +459,10 @@ class BrickBreakerGame:
 
     def _wait_for_restart_or_quit(self) -> bool:
         print(f"Game over. Final score: {self.score}. Press R to restart or Q to quit.")
+        if self.highscores:
+            print("Top scores:")
+            for idx, (name, score) in enumerate(self.highscores[:10], start=1):
+                print(f" {idx:>2}. {name} - {score}")
         flash = False
         while True:
             flash = not flash
@@ -324,6 +470,7 @@ class BrickBreakerGame:
                 self.cw.fill_solid(6, 6, 20)
             else:
                 self.cw.fill_solid(0, 0, 0)
+            self._draw_highscores(flash)
             key = normalize_key(self.cw.show(sleep_ms=220))
             if key in (27, ord("q"), ord("Q")):
                 return False
@@ -382,6 +529,7 @@ class BrickBreakerGame:
                 if frame_time < target_dt:
                     time.sleep(target_dt - frame_time)
 
+            self._record_highscore()
             running = self._wait_for_restart_or_quit()
 
 
