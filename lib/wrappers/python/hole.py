@@ -15,6 +15,7 @@ except ImportError:
 
 from game_input import PhysicalMotionController, normalize_key
 from score_display import draw_score
+from game_over_display import draw_game_over
 
 
 class PoseController:
@@ -172,6 +173,11 @@ def hole_runner(motion_controller=None):
 
 		cw.pixels[player_row, player_col] = player_color
 		cw.show()
+
+	# Game over screen
+	draw_game_over(cw.pixels, score=score)
+	cw.show()
+	time.sleep(3)  # Show game over screen for 3 seconds
 
 	print(f"Game over. Score: {score}")
 
