@@ -43,10 +43,11 @@ class ContourWallEmulator:
                 self.pushed_frames += 1
 
         cv.imshow('Contour Wall Emulator', self.__matrix)
-        cv.waitKey(1)
+        key = cv.waitKeyEx(1)
         
         if sleep_ms > 0:
             time.sleep(sleep_ms / 1000)
+        return key
     
     def fill_solid(self, r: int, g: int, b: int):
         self.pixels[:] = r, g, b
