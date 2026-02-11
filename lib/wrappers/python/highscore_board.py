@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
 
 
 @dataclass
@@ -9,6 +12,12 @@ class HighscoreEntry:
     score: int
     is_current: bool
     rank: int
+
+
+def highscore_path(base_dir: Path, game_name: str) -> Path:
+    safe_name = "".join(ch for ch in game_name if ch.isalnum() or ch in ("-", "_"))
+    safe_name = safe_name.strip("-_") or "game"
+    return base_dir / f"highscores_{safe_name}.xml"
 
 
 class HighscoreBoard:
@@ -58,6 +67,64 @@ class HighscoreBoard:
         self.rows = rows
         self.cols = cols
         self.pixels = pixels
+
+    def load(self, path: Path) -> list[tuple[str, int]]:
+        if not path.exists():
+            return []
+        try:
+            tree = ET.parse(path)
+            root = tree.getroot()
+        except (ET.ParseError, OSError):
+            return []
+
+        scores: list[tuple[str, int]] = []
+        for entry in root.findall("score"):
+            name = entry.get("name", "")
+            value = entry.get("value", "0")
+            try:
+                score = int(value)
+            except ValueError:
+                continue
+            name = name.strip() or "AAA"
+            scores.append((self.normalize_initials(name), score))
+
+        scores.sort(key=lambda item: item[1], reverse=True)
+        return scores[:10]
+
+    def save(self, path: Path, highscores: list[tuple[str, int]]) -> None:
+        root = ET.Element("highscores")
+        for name, score in highscores[:10]:
+            entry = ET.SubElement(root, "score")
+            entry.set("name", name)
+            entry.set("value", str(score))
+        tree = ET.ElementTree(root)
+        try:
+            tree.write(path, encoding="utf-8", xml_declaration=True)
+        except OSError:
+            pass
+
+    def record(
+        self,
+        highscores: list[tuple[str, int]],
+        score: int,
+        last_initials: str,
+        path: Path | None = None,
+    ) -> tuple[str, list[tuple[str, int]]]:
+        if not sys.stdin or not sys.stdin.isatty():
+            return "YOU", highscores
+        try:
+            name = input("Enter your name for the high score list (blank to skip): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return "YOU", highscores
+        if not name:
+            return "YOU", highscores
+        initials = self.normalize_initials(name)
+        highscores.append((initials, score))
+        highscores.sort(key=lambda item: item[1], reverse=True)
+        highscores = highscores[:10]
+        if path is not None:
+            self.save(path, highscores)
+        return initials, highscores
 
     @staticmethod
     def normalize_initials(name: str) -> str:
@@ -143,7 +210,9 @@ class HighscoreBoard:
             score_text = str(max(0, entry.score))
             score_width = len(score_text) * digit_w + (len(score_text) - 1) * glyph_gap
 
-            total_width = rank_width + 1 + name_width + 4 + score_width
+            rank_name_gap = 3
+            name_score_gap = 4
+            total_width = rank_width + rank_name_gap + name_width + name_score_gap + score_width
             start_left = max(0, (self.cols - total_width) // 2)
 
             rank_right_col = min(self.cols - 1, start_left + rank_width - 1)
@@ -154,7 +223,7 @@ class HighscoreBoard:
                 color=name_color,
             )
 
-            name_left = rank_right_col + 2  # 1-column gap between rank and name.
+            name_left = rank_right_col + rank_name_gap + 1
             if name_left < self.cols:
                 self._draw_text(
                     text=entry.name,
@@ -163,7 +232,7 @@ class HighscoreBoard:
                     color=name_color,
                 )
 
-            score_left = name_left + name_width + 4
+            score_left = name_left + name_width + name_score_gap
             score_right_col = min(self.cols - 1, score_left + score_width - 1)
             self._draw_number(
                 value=entry.score,

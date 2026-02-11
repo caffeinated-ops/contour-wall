@@ -20,7 +20,6 @@ from pathlib import Path
 import random
 import sys
 import time
-import xml.etree.ElementTree as ET
 
 import cv2 as cv
 import numpy as np
@@ -39,7 +38,7 @@ if str(WRAPPER_DIR) not in sys.path:
 
 from contourwall_emulator import ContourWallEmulator
 from game_input import LEFT_KEYS, RIGHT_KEYS, PhysicalMotionController, normalize_key
-from highscore_board import HighscoreBoard
+from highscore_board import HighscoreBoard, highscore_path
 
 
 class PoseController:
@@ -173,67 +172,19 @@ class BrickBreakerGame:
         self.lives = 3
         self.level = 1
         self.frame = 0
-        self.highscore_path = EXAMPLES_DIR / "highscores.xml"
+        self.highscore_path = highscore_path(EXAMPLES_DIR, "brick_breaker")
         self.highscores: list[tuple[str, int]] = []
         self.last_initials = "YOU"
         self.highscore_board = HighscoreBoard(self.rows, self.cols, self.cw.pixels)
-        self._load_highscores()
-
-    def _load_highscores(self) -> None:
-        if not self.highscore_path.exists():
-            self.highscores = []
-            return
-        try:
-            tree = ET.parse(self.highscore_path)
-            root = tree.getroot()
-        except (ET.ParseError, OSError):
-            self.highscores = []
-            return
-
-        scores: list[tuple[str, int]] = []
-        for entry in root.findall("score"):
-            name = entry.get("name", "")
-            value = entry.get("value", "0")
-            try:
-                score = int(value)
-            except ValueError:
-                continue
-            name = name.strip() or "AAA"
-            scores.append((HighscoreBoard.normalize_initials(name), score))
-
-        scores.sort(key=lambda item: item[1], reverse=True)
-        self.highscores = scores[:10]
-
-    def _save_highscores(self) -> None:
-        root = ET.Element("highscores")
-        for name, score in self.highscores[:10]:
-            entry = ET.SubElement(root, "score")
-            entry.set("name", name)
-            entry.set("value", str(score))
-        tree = ET.ElementTree(root)
-        try:
-            tree.write(self.highscore_path, encoding="utf-8", xml_declaration=True)
-        except OSError:
-            pass
+        self.highscores = self.highscore_board.load(self.highscore_path)
 
     def _record_highscore(self) -> None:
-        if not sys.stdin or not sys.stdin.isatty():
-            self.last_initials = "YOU"
-            return
-        try:
-            name = input("Enter your name for the high score list (blank to skip): ").strip()
-        except (EOFError, KeyboardInterrupt):
-            self.last_initials = "YOU"
-            return
-        if not name:
-            self.last_initials = "YOU"
-            return
-        initials = HighscoreBoard.normalize_initials(name)
-        self.last_initials = initials
-        self.highscores.append((initials, self.score))
-        self.highscores.sort(key=lambda item: item[1], reverse=True)
-        self.highscores = self.highscores[:10]
-        self._save_highscores()
+        self.last_initials, self.highscores = self.highscore_board.record(
+            self.highscores,
+            self.score,
+            self.last_initials,
+            path=self.highscore_path,
+        )
 
     def _draw_highscores(self, flash: bool) -> None:
         self.highscore_board.draw(self.highscores, self.last_initials, self.score, flash)
