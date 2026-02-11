@@ -39,6 +39,7 @@ if str(WRAPPER_DIR) not in sys.path:
 
 from contourwall_emulator import ContourWallEmulator
 from game_input import LEFT_KEYS, RIGHT_KEYS, PhysicalMotionController, normalize_key
+from highscore_board import HighscoreBoard
 
 
 class PoseController:
@@ -175,6 +176,7 @@ class BrickBreakerGame:
         self.highscore_path = EXAMPLES_DIR / "highscores.xml"
         self.highscores: list[tuple[str, int]] = []
         self.last_initials = "YOU"
+        self.highscore_board = HighscoreBoard(self.rows, self.cols, self.cw.pixels)
         self._load_highscores()
 
     def _load_highscores(self) -> None:
@@ -197,7 +199,7 @@ class BrickBreakerGame:
             except ValueError:
                 continue
             name = name.strip() or "AAA"
-            scores.append((self._normalize_initials(name), score))
+            scores.append((HighscoreBoard.normalize_initials(name), score))
 
         scores.sort(key=lambda item: item[1], reverse=True)
         self.highscores = scores[:10]
@@ -226,7 +228,7 @@ class BrickBreakerGame:
         if not name:
             self.last_initials = "YOU"
             return
-        initials = self._normalize_initials(name)
+        initials = HighscoreBoard.normalize_initials(name)
         self.last_initials = initials
         self.highscores.append((initials, self.score))
         self.highscores.sort(key=lambda item: item[1], reverse=True)
@@ -234,100 +236,7 @@ class BrickBreakerGame:
         self._save_highscores()
 
     def _draw_highscores(self, flash: bool) -> None:
-        if not self.highscores and self.score <= 0:
-            return
-
-        max_rows = (self.rows - 2) // 6
-        display_count = max(1, min(4, max_rows, 4))
-        start_row = 2
-        display_entries = self._build_display_highscores()
-        for idx, (name, score, is_current, rank) in enumerate(
-            display_entries[:display_count]
-        ):
-            if is_current and flash:
-                name_color = (255, 220, 120)
-                score_color = (255, 220, 120)
-            elif is_current:
-                name_color = (80, 140, 250)
-                score_color = (80, 140, 250)
-            else:
-                name_color = (140, 210, 255)
-                score_color = (200, 200, 200)
-            row = start_row + idx * 6
-
-            digit_w = 3
-            glyph_gap = 1
-            rank_text = str(rank)
-            rank_width = len(rank_text) * digit_w + (len(rank_text) - 1) * glyph_gap
-            name_width = len(name) * digit_w + (len(name) - 1) * glyph_gap
-            score_text = str(max(0, score))
-            score_width = len(score_text) * digit_w + (len(score_text) - 1) * glyph_gap
-
-            total_width = rank_width + 1 + name_width + 4 + score_width
-            start_left = max(0, (self.cols - total_width) // 2)
-
-            rank_right_col = min(self.cols - 1, start_left + rank_width - 1)
-            self._draw_number(
-                value=rank,
-                top_row=row,
-                right_col=rank_right_col,
-                color=name_color,
-            )
-
-            name_left = rank_right_col + 2  # 1-column gap between rank and name.
-            if name_left < self.cols:
-                self._draw_text(
-                    text=name,
-                    top_row=row,
-                    left_col=name_left,
-                    color=name_color,
-                )
-
-            score_left = name_left + name_width + 4
-            score_right_col = min(self.cols - 1, score_left + score_width - 1)
-            self._draw_number(
-                value=score,
-                top_row=row,
-                right_col=score_right_col,
-                color=score_color,
-            )
-
-    def _normalize_initials(self, name: str) -> str:
-        cleaned = "".join(ch for ch in name if ch.isalnum()).upper()
-        return (cleaned[:3] if cleaned else "AAA").ljust(3, "_")
-
-    def _build_display_highscores(self) -> list[tuple[str, int, bool, int]]:
-        current_entry = (self.last_initials, self.score, True)
-        entries = [(name, score, False) for name, score in self.highscores]
-        current_pos = -1
-        for idx, (name, score, _) in enumerate(entries):
-            if name == self.last_initials and score == self.score:
-                entries[idx] = (name, score, True)
-                current_pos = idx
-                break
-        if current_pos == -1:
-            entries.append((self.last_initials, self.score, True))
-            current_pos = len(entries) - 1
-
-        ranked = sorted(entries, key=lambda item: item[1], reverse=True)
-        for idx, entry in enumerate(ranked):
-            if entry[2]:
-                current_pos = idx
-                break
-
-        if current_pos < 3:
-            display = ranked[:3]
-        else:
-            display = ranked[:3] + [ranked[current_pos]]
-
-        display_with_rank = []
-        for idx, (name, score, is_current) in enumerate(display):
-            rank = next(
-                (pos + 1 for pos, entry in enumerate(ranked) if entry == (name, score, is_current)),
-                idx + 1,
-            )
-            display_with_rank.append((name, score, is_current, rank))
-        return display_with_rank
+        self.highscore_board.draw(self.highscores, self.last_initials, self.score, flash)
 
     def reset_game(self) -> None:
         self.score = 0
