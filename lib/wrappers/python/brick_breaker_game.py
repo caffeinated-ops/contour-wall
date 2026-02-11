@@ -241,7 +241,9 @@ class BrickBreakerGame:
         display_count = max(1, min(4, max_rows, 4))
         start_row = 2
         display_entries = self._build_display_highscores()
-        for idx, (name, score, is_current) in enumerate(display_entries[:display_count]):
+        for idx, (name, score, is_current, rank) in enumerate(
+            display_entries[:display_count]
+        ):
             if is_current and flash:
                 name_color = (255, 220, 120)
                 score_color = (255, 220, 120)
@@ -251,16 +253,42 @@ class BrickBreakerGame:
             else:
                 name_color = (140, 210, 255)
                 score_color = (200, 200, 200)
-            self._draw_text(
-                text=name,
-                top_row=start_row + idx * 6,
-                left_col=0,
+            row = start_row + idx * 6
+
+            digit_w = 3
+            glyph_gap = 1
+            rank_text = str(rank)
+            rank_width = len(rank_text) * digit_w + (len(rank_text) - 1) * glyph_gap
+            name_width = len(name) * digit_w + (len(name) - 1) * glyph_gap
+            score_text = str(max(0, score))
+            score_width = len(score_text) * digit_w + (len(score_text) - 1) * glyph_gap
+
+            total_width = rank_width + 1 + name_width + 4 + score_width
+            start_left = max(0, (self.cols - total_width) // 2)
+
+            rank_right_col = min(self.cols - 1, start_left + rank_width - 1)
+            self._draw_number(
+                value=rank,
+                top_row=row,
+                right_col=rank_right_col,
                 color=name_color,
             )
+
+            name_left = rank_right_col + 2  # 1-column gap between rank and name.
+            if name_left < self.cols:
+                self._draw_text(
+                    text=name,
+                    top_row=row,
+                    left_col=name_left,
+                    color=name_color,
+                )
+
+            score_left = name_left + name_width + 4
+            score_right_col = min(self.cols - 1, score_left + score_width - 1)
             self._draw_number(
                 value=score,
-                top_row=start_row + idx * 6,
-                right_col=self.cols - 1,
+                top_row=row,
+                right_col=score_right_col,
                 color=score_color,
             )
 
@@ -268,7 +296,7 @@ class BrickBreakerGame:
         cleaned = "".join(ch for ch in name if ch.isalnum()).upper()
         return (cleaned[:3] if cleaned else "AAA").ljust(3, "_")
 
-    def _build_display_highscores(self) -> list[tuple[str, int, bool]]:
+    def _build_display_highscores(self) -> list[tuple[str, int, bool, int]]:
         current_entry = (self.last_initials, self.score, True)
         entries = [(name, score, False) for name, score in self.highscores]
         current_pos = -1
@@ -288,10 +316,18 @@ class BrickBreakerGame:
                 break
 
         if current_pos < 3:
-            return ranked[:3]
+            display = ranked[:3]
+        else:
+            display = ranked[:3] + [ranked[current_pos]]
 
-        top_three = ranked[:3]
-        return top_three + [current_entry]
+        display_with_rank = []
+        for idx, (name, score, is_current) in enumerate(display):
+            rank = next(
+                (pos + 1 for pos, entry in enumerate(ranked) if entry == (name, score, is_current)),
+                idx + 1,
+            )
+            display_with_rank.append((name, score, is_current, rank))
+        return display_with_rank
 
     def reset_game(self) -> None:
         self.score = 0
