@@ -37,6 +37,7 @@ from game_input import LEFT_KEYS, RIGHT_KEYS, PhysicalMotionController, normaliz
 from lives_display import draw_lives
 from score_display import draw_score
 from highscore_board import HighscoreBoard, highscore_path
+from game_over_display import draw_game_over
 
 
 @dataclass
@@ -411,11 +412,8 @@ class SubwaySurfersGame:
         print(
             f"Game over. Score: {self.score}. Distance: {int(self.distance)}."
         )
-        flash = False
-        for _ in range(10):
-            flash = not flash
-            self.cw.fill_solid(18, 0, 0) if flash else self.cw.fill_solid(0, 0, 0)
-            self.cw.show(sleep_ms=220)
+        draw_game_over(self.cw.pixels, self.score)
+        self.cw.show(sleep_ms=2000)
 
     def run(self) -> int:
         print("Subway Surfers (ContourWall Edition)")
