@@ -14,6 +14,7 @@ except ImportError:
 	mp = None
 
 from game_input import PhysicalMotionController, normalize_key
+from score_display import draw_score
 
 
 class PoseController:
@@ -154,12 +155,17 @@ def hole_runner(motion_controller=None):
 			if line_row >= player_row:
 				if hole_start <= player_col < hole_start + hole_width:
 					score += 1
+					line_interval = max(0.02, line_interval - 0.005)  # Speed up slightly
 					line_row = 0
 					hole_start = random.randint(0, cols - hole_width)
 				else:
 					break
 
 		cw.pixels[:] = 0, 0, 0
+		
+		# Draw score at top left
+		draw_score(cw.pixels, score, start_row=0, position='center')
+		
 		if 0 <= line_row < rows:
 			cw.pixels[line_row, :] = 255, 255, 255
 			cw.pixels[line_row, hole_start:hole_start + hole_width] = 0, 0, 0
