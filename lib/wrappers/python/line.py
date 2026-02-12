@@ -39,15 +39,67 @@ from game_input import (
 	normalize_key,
 )
 from lives_display import draw_lives
+from score_display import draw_score
+
+
+@dataclass
+class Particle:
+	"""Represents a single particle in the effect system"""
+	x: float
+	y: float
+	vx: float
+	vy: float
+	life: float
+	max_life: float
+	color: tuple[int, int, int]
+
+	def update(self) -> bool:
+		"""Update particle position and life. Returns True if still alive."""
+		self.x += self.vx
+		self.y += self.vy
+		self.vy += 0.05
+		self.life -= 1
+		return self.life > 0
+
+	def render(self, pixels: np.ndarray) -> None:
+		"""Draw particle to pixels array"""
+		x, y = int(self.x), int(self.y)
+		rows, cols = pixels.shape[:2]
+		if 0 <= x < cols and 0 <= y < rows:
+			alpha = self.life / self.max_life
+			color = tuple(int(c * alpha) for c in self.color)
+			pixels[y, x] = color
 
 
 @dataclass
 class LaneState:
 	current: int
 	target: int
+	target_time: float = 0.0
 
 
 class LaneStayGame:
+	FASTER_FONT = {
+		'F': [
+			[1,1,1], [1,0,0], [1,1,0], [1,0,0], [1,0,0]
+		],
+		'A': [
+			[0,1,0], [1,0,1], [1,1,1], [1,0,1], [1,0,1]
+		],
+		'S': [
+			[1,1,1], [1,0,0], [1,1,1], [0,0,1], [1,1,1]
+		],
+		'T': [
+			[1,1,1], [0,1,0], [0,1,0], [0,1,0], [0,1,0]
+		],
+		'E': [
+			[1,1,1], [1,0,0], [1,1,0], [1,0,0], [1,1,1]
+		],
+		'R': [
+			[1,1,0], [1,0,1], [1,1,0], [1,0,1], [1,0,1]
+		]
+	}
+
 	def __init__(
 		self,
 		wall: ContourWallEmulator,
@@ -58,21 +110,35 @@ class LaneStayGame:
 		self.use_physical_input = motion_controller is not None
 		self.rows, self.cols = wall.pixels.shape[:2]
 		self.player_row = max(2, self.rows - 3)
-		self.lane_state = LaneState(current=1, target=1)
+		self.lane_state = LaneState(current=1, target=1, target_time=time.time())
 		self.score = 0
+		self.successful_scores = 0  # Track consecutive successes for speed-up
 		self.lives = 3
-		self.tick_interval = 1.8
+		self.base_tick_interval = 1.8
+		self.tick_interval = self.base_tick_interval
 		self.last_tick = time.time()
 		self.physical_col_float = float(self.cols // 2)
+		self.frame_count = 0
+		self.score_flash = 0
+		self.particles: list[Particle] = []
+		self.faster_flash_frames = 0
+		self.faster_flash_max = 36  # ~1.8s at 20ms per frame
+		self.faster_flash_colors = [(255, 255, 0), (0, 255, 255)]
+		self.faster_flash_color_idx = 0
+		self.faster_flash_score = 0
 
 	def reset(self) -> None:
 		self.rows, self.cols = self.cw.pixels.shape[:2]
 		self.player_row = max(2, self.rows - 3)
-		self.lane_state = LaneState(current=1, target=random.randint(0, 2))
+		self.lane_state = LaneState(current=1, target=random.randint(0, 2), target_time=time.time())
 		self.score = 0
+		self.successful_scores = 0
 		self.lives = 3
 		self.last_tick = time.time()
 		self.physical_col_float = float(self.cols // 2)
+		self.frame_count = 0
+		self.score_flash = 0
+		self.particles = []
 
 	def _lane_cols(self) -> list[int]:
 		return [max(1, self.cols // 6), self.cols // 2, min(self.cols - 2, (self.cols * 5) // 6)]
@@ -110,35 +176,145 @@ class LaneStayGame:
 		return True
 
 	def _tick_scoring(self) -> None:
+		if self.faster_flash_frames > 0:
+			return  # Pause scoring during FASTER flash
 		if time.time() - self.last_tick < self.tick_interval:
 			return
 		self.last_tick = time.time()
 
 		if self.lane_state.current == self.lane_state.target:
 			self.score += 1
+			self.successful_scores += 1
+			self.score_flash = 10
+			self._emit_score_particles()
+			# Speed up every 3 successful scores
+			if self.successful_scores % 3 == 0:
+				self.faster_flash_frames = self.faster_flash_max
+				self.faster_flash_score = self.score
+				# Update tick_interval before flashing (0.90 = 10% faster each time)
+				self.tick_interval = max(0.5, self.base_tick_interval * (0.90 ** (self.successful_scores // 3)))
 		else:
 			self.lives -= 1
+			self._emit_damage_particles()
 
 		self.lane_state.target = random.randint(0, 2)
+		self.lane_state.target_time = time.time()
+
+	def _emit_score_particles(self) -> None:
+		"""Emit gold particles when scoring"""
+		lane_cols = self._lane_cols()
+		player_col = lane_cols[self.lane_state.current]
+		for _ in range(12):
+			angle = random.uniform(0, 2 * np.pi)
+			speed = random.uniform(0.5, 2.0)
+			vx = speed * np.cos(angle)
+			vy = speed * np.sin(angle)
+			particle = Particle(
+				x=float(player_col),
+				y=float(self.player_row),
+				vx=vx,
+				vy=vy,
+				life=30,
+				max_life=30,
+				color=(0, 255, 0)
+			)
+			self.particles.append(particle)
+
+	def _emit_damage_particles(self) -> None:
+		"""Emit red particles when losing a life"""
+		lane_cols = self._lane_cols()
+		player_col = lane_cols[self.lane_state.current]
+		for _ in range(16):
+			angle = random.uniform(0, 2 * np.pi)
+			speed = random.uniform(0.8, 2.5)
+			vx = speed * np.cos(angle)
+			vy = speed * np.sin(angle)
+			particle = Particle(
+				x=float(player_col),
+				y=float(self.player_row),
+				vx=vx,
+				vy=vy,
+				life=35,
+				max_life=35,
+				color=(0, 0, 255)
+			)
+			self.particles.append(particle)
+
+	def draw_text_block(self, pixels, text, row, col, color):
+		for idx, char in enumerate(text):
+			if char not in self.FASTER_FONT:
+				continue
+			pattern = self.FASTER_FONT[char]
+			for r in range(5):
+				for c in range(3):
+					if pattern[r][c]:
+						pixels[row + r, col + idx * 4 + c] = color
 
 	def _draw(self) -> None:
-		self.cw.pixels[:] = (5, 5, 12)
+		self.cw.pixels[:] = (8, 10, 25)
 
 		lane_cols = self._lane_cols()
-		for i, col in enumerate(lane_cols):
-			color = (50, 50, 70)
-			if i == self.lane_state.target:
-				color = (30, 200, 90)
-			self.cw.pixels[:, col] = color
+		time_elapsed = time.time() - self.lane_state.target_time
+		fill_ratio = max(0, 1.0 - (time_elapsed / self.tick_interval))
+
+		# FASTER flash: all lanes fully lit, no timer, target lane not highlighted
+		if self.faster_flash_frames > 0:
+			for i, col in enumerate(lane_cols):
+				color = (40, 50, 90)
+				self.cw.pixels[:, col] = color
+				self.cw.pixels[:, col + 1] = tuple(c // 2 for c in color)
+		else:
+			for i, col in enumerate(lane_cols):
+				color = (40, 50, 90)
+				if i == self.lane_state.target:
+					pulse = int(30 * (0.5 + 0.5 * np.sin(self.frame_count * 0.1)))
+					color = (50 + pulse, 220 + pulse, 100 + pulse)
+					fill_height = int(self.rows * fill_ratio)
+					if fill_height > 0:
+						self.cw.pixels[self.rows - fill_height:, col] = color
+						self.cw.pixels[self.rows - fill_height:, col + 1] = tuple(c // 2 for c in color)
+					if fill_height < self.rows:
+						self.cw.pixels[:self.rows - fill_height, col] = (20, 20, 30)
+						self.cw.pixels[:self.rows - fill_height, col + 1] = (10, 10, 15)
+				else:
+					self.cw.pixels[:, col] = color
+					self.cw.pixels[:, col + 1] = tuple(c // 2 for c in color)
 
 		player_col = lane_cols[self.lane_state.current]
-		self.cw.pixels[self.player_row:self.player_row + 2, player_col:player_col + 2] = (255, 220, 80)
+		player_color = (255, 220, 80)
+		if self.score_flash > 0:
+			flash_intensity = int(100 * (self.score_flash / 10.0))
+			player_color = (255, 255, min(255, 80 + flash_intensity // 2))
+		self.cw.pixels[self.player_row:self.player_row + 2, player_col:player_col + 2] = player_color
+
+		# Update and render particles
+		self.particles = [p for p in self.particles if p.update()]
+		for particle in self.particles:
+			particle.render(self.cw.pixels)
 
 		draw_lives(self.cw, self.lives)
 
-		score_width = min(self.cols, self.score)
-		if score_width > 0:
-			self.cw.pixels[1, self.cols - score_width:self.cols] = (90, 160, 255)
+		score_color = (90, 160, 255)
+		if self.score_flash > 0:
+			score_color = (150, 200, 255)
+		draw_score(self.cw.pixels, self.score, start_row=0, color=score_color, position='right')
+
+		# FASTER flash text
+		if self.faster_flash_frames > 0:
+			color = self.faster_flash_colors[(self.faster_flash_frames // 6) % 2]
+			text = 'FASTER'
+			row = self.rows // 2 - 2
+			col = (self.cols - 6 * 4 + 1) // 2
+			self.draw_text_block(self.cw.pixels, text, row, col, color)
+			self.faster_flash_frames -= 1
+			# Reset timers when flash ends to prevent immediate scoring and show active lane properly
+			if self.faster_flash_frames == 0:
+				self.last_tick = time.time()
+				self.lane_state.target_time = time.time()
+
+		self.frame_count += 1
+		if self.score_flash > 0:
+			self.score_flash -= 1
 
 	def _draw_digit(self, digit: int) -> None:
 		patterns = {
@@ -163,6 +339,28 @@ class LaneStayGame:
 			for c, ch in enumerate(row):
 				if ch == "1":
 					self.cw.pixels[start_row + r, start_col + c] = (30, 200, 90)
+
+	# Block font for FASTER (5x3 per letter)
+	FASTER_FONT = {
+		'F': [
+			[1,1,1], [1,0,0], [1,1,0], [1,0,0], [1,0,0]
+		],
+		'A': [
+			[0,1,0], [1,0,1], [1,1,1], [1,0,1], [1,0,1]
+		],
+		'S': [
+			[1,1,1], [1,0,0], [1,1,1], [0,0,1], [1,1,1]
+		],
+		'T': [
+			[1,1,1], [0,1,0], [0,1,0], [0,1,0], [0,1,0]
+		],
+		'E': [
+			[1,1,1], [1,0,0], [1,1,0], [1,0,0], [1,1,1]
+		],
+		'R': [
+			[1,1,0], [1,0,1], [1,1,0], [1,0,1], [1,0,1]
+		]
+	}
 
 	def run(self) -> None:
 		print("Lane Stay Game")
