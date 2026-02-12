@@ -7,10 +7,12 @@ const games = {
   brick_breaker: {
     script: 'brick_breaker_game.py',
     args: ['--physical', '--camera-index', '1'],
+    supportsPlayerName: true,
   },
   subway_surfers: {
     script: 'subway_surfers_game.py',
     args: ['--physical', '--camera-index', '1'],
+    supportsPlayerName: true,
   },
   line: {
     script: 'line.py',
@@ -54,12 +56,16 @@ function quoteArg(value) {
   return `"${String(value).replace(/"/g, '\\"')}"`;
 }
 
-function launchInTerminal(gameKey) {
+function launchInTerminal(gameKey, playerName) {
   const scriptsDir = getScriptsDir();
   const pythonExec = getPythonExecutable();
   const game = games[gameKey];
   const scriptPath = path.join(scriptsDir, game.script);
-  const args = game.args || [];
+  const args = [...(game.args || [])];
+
+  if (game.supportsPlayerName && playerName) {
+    args.push('--player-name', playerName);
+  }
 
   if (process.platform === 'win32') {
     const pythonPath = path.normalize(pythonExec);
@@ -96,14 +102,21 @@ function launchInTerminal(gameKey) {
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 560,
-    height: 420,
-    resizable: false,
+    width: 960,
+    height: 720,
+    minWidth: 640,
+    minHeight: 480,
+    resizable: true,
+    maximizable: true,
+    fullscreenable: true,
+    autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
     },
   });
+
+  win.maximize();
 
   win.loadFile(path.join(__dirname, 'index.html'));
 }
@@ -124,14 +137,16 @@ app.on('window-all-closed', () => {
   }
 });
 
-ipcMain.handle('launch-game', async (event, key) => {
+ipcMain.handle('launch-game', async (event, payload) => {
+  const key = payload?.key;
+  const playerName = typeof payload?.playerName === 'string' ? payload.playerName.trim() : '';
   const game = games[key];
   if (!game) {
     return { ok: false, message: 'Unknown game selection.' };
   }
 
   try {
-    launchInTerminal(key);
+    launchInTerminal(key, playerName);
     return { ok: true };
   } catch (error) {
     dialog.showErrorBox('Launch failed', String(error));

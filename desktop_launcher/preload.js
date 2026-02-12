@@ -1,5 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('launcher', {
-  launchGame: (key) => ipcRenderer.invoke('launch-game', key),
+  launchGame: (key, playerName) => ipcRenderer.invoke('launch-game', { key, playerName }),
 });
