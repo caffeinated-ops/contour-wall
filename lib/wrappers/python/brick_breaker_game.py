@@ -36,7 +36,7 @@ WRAPPER_DIR = EXAMPLES_DIR.parent
 if str(WRAPPER_DIR) not in sys.path:
     sys.path.insert(0, str(WRAPPER_DIR))
 
-from contourwall_emulator import ContourWallEmulator
+from contourwall import ContourWall
 from game_input import LEFT_KEYS, RIGHT_KEYS, PhysicalMotionController, normalize_key
 from highscore_board import HighscoreBoard, highscore_path
 
@@ -150,7 +150,7 @@ class BrickBreakerGame:
 
     def __init__(
         self,
-        wall: ContourWallEmulator,
+        wall: ContourWall,
         motion_controller: PhysicalMotionController | None = None,
         player_name: str | None = None,
     ):
@@ -492,7 +492,7 @@ def main() -> None:
     args = parser.parse_args()
 
     random.seed()
-    cw = ContourWallEmulator()
+    cw = ContourWall()
     cw.new_with_ports("COM10", "COM12", "COM9", "COM14", "COM13", "COM11")
 
     motion_controller: PhysicalMotionController | None = None

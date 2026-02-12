@@ -6,21 +6,21 @@ const { spawn } = require('child_process');
 const games = {
   brick_breaker: {
     script: 'brick_breaker_game.py',
-    args: ['--physical', '--camera-index', '1'],
+    args: ['--physical', '--camera-index', '0'],
     supportsPlayerName: true,
   },
   subway_surfers: {
     script: 'subway_surfers_game.py',
-    args: ['--physical', '--camera-index', '1'],
+    args: ['--physical', '--camera-index', '0'],
     supportsPlayerName: true,
   },
   line: {
     script: 'line.py',
-    args: ['--physical', '--camera-index', '1'],
+    args: ['--physical', '--camera-index', '0'],
   },
   hole: {
     script: 'hole.py',
-    args: ['--physical', '--camera-index', '1'],
+    args: ['--physical', '--camera-index', '0'],
   },
 };
 
