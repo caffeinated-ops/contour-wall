@@ -17,7 +17,6 @@ except ImportError:
 
 from game_input import PhysicalMotionController, normalize_key
 from score_display import draw_score
-from game_over_display import draw_game_over
 from lives_display import draw_lives
 from highscore_board import HighscoreBoard, highscore_path
 from countdown_display import show_countdown
@@ -183,15 +182,19 @@ def update_particles(particles):
 		particles.remove(particle)
 
 
-def hole_runner(motion_controller=None):
+def hole_runner(motion_controller=None, player_name: str | None = None):
 	rows, cols = cw.pixels.shape[:2]
 
 	EXAMPLES_DIR = Path(__file__).resolve().parent
 	highscore_path_var = highscore_path(EXAMPLES_DIR, "hole_runner")
-	highscores = []
 	highscore_board = HighscoreBoard(rows, cols, cw.pixels)
 	highscores = highscore_board.load(highscore_path_var)
-	last_initials = ""
+	last_initials = (
+		HighscoreBoard.normalize_initials(player_name)
+		if player_name
+		else "YOU"
+	)
+	allow_prompt = not bool(player_name)
 
 	player_row = rows - 2
 	player_col = cols // 2
@@ -347,80 +350,32 @@ def hole_runner(motion_controller=None):
 
 		cw.show()
 
-	# Game over screen with animation
-	game_over_start = time.time()
-	animation_frames = 60  # 2 seconds at 30fps
-
-	for frame in range(animation_frames):
-		# Create explosion effect
-		cw.pixels[:] = 0, 0, 0
-
-		# Draw expanding explosion circles
-		center_row, center_col = player_row, player_col
-		radius = frame * 0.5
-
-		if radius > 0:  # Avoid division by zero
-			for r in range(rows):
-				for c in range(cols):
-					distance = math.sqrt((r - center_row)**2 + (c - center_col)**2)
-					if distance <= radius and distance > radius - 1:
-						# Explosion ring colors
-						intensity = 1.0 - (distance / radius)
-						if frame < 20:
-							color = (int(255 * intensity), 0, int(255 * intensity))  # Purple
-						elif frame < 40:
-							color = (int(255 * intensity), int(100 * intensity), int(255 * intensity))  # Purple-pink
-						else:
-							color = (int(128 * intensity), 0, int(128 * intensity))  # Dark purple
-
-						cw.pixels[r, c] = color
-
-		# Draw final score with pulsing effect
-		pulse = math.sin(frame * 0.3) * 0.3 + 0.7
-		score_color = (int(255 * pulse), int(255 * pulse), int(100 * pulse))
-		draw_score(cw.pixels, score, start_row=rows//2 - 3, position='center', color=score_color)
-
-		cw.show()
-		time.sleep(0.033)  # ~30fps
-
-	# Final static game over screen
-	cw.pixels[:] = 0, 0, 0
-	draw_game_over(cw.pixels, score=score)
-	cw.show()
-	time.sleep(2)  # Show final screen for 2 seconds
-
 	print(f"Game over. Score: {score}")
 
 	# Record highscore
-	last_initials, highscores = highscore_board.record(
+	last_initials, highscores = highscore_board.record_and_save(
 		highscores,
 		score,
 		last_initials,
-		path=highscore_path_var,
+		highscore_path_var,
+		allow_prompt=allow_prompt,
 	)
 
-	# Show highscores
-	if highscores:
-		for idx, (name, score_val) in enumerate(highscores[:10], start=1):
-			print(f"{idx}. {name}: {score_val}")
-
+	# Show highscores for 5 seconds, then exit
+	start = time.time()
 	flash = False
-	while True:
+	while time.time() - start < 5.0:
 		flash = not flash
+		cw.fill_solid(0, 0, 0)
 		highscore_board.draw(highscores, last_initials, score, flash)
-		key = cw.show(sleep_ms=500)
-		if key in (27, ord("q"), ord("Q")) or key == -1:
-			return False
-		if key in (ord("r"), ord("R")):
-			return True
-
+		cw.show(sleep_ms=220)
 		if motion_controller is not None:
 			motion_controller.read_target_col(cols)
 			camera_key = normalize_key(motion_controller.read_key())
 			if camera_key in (27, ord("q"), ord("Q")):
 				return False
-			if camera_key in (ord("r"), ord("R")):
-				return True
+
+	return False
 
 
 if __name__ == "__main__":
@@ -440,6 +395,12 @@ if __name__ == "__main__":
 		"--show-camera",
 		action="store_true",
 		help="Show webcam debug windows in --physical mode.",
+	)
+	parser.add_argument(
+		"--player-name",
+		type=str,
+		default="",
+		help="Player name to use for highscores.",
 	)
 	args = parser.parse_args()
 
@@ -465,8 +426,12 @@ if __name__ == "__main__":
 				print(f"[INPUT WARN] {inner_exc}")
 				print("[INPUT WARN] Falling back to keyboard input.")
 
+	player_name = args.player_name.strip()
 	try:
-		while hole_runner(motion_controller=motion_controller):
+		while hole_runner(
+			motion_controller=motion_controller,
+			player_name=player_name or None,
+		):
 			pass
 	finally:
 		if motion_controller is not None:

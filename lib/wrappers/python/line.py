@@ -150,9 +150,11 @@ class LaneStayGame:
 
 	def _show_highscores(self) -> None:
 		start = time.perf_counter()
+		flash = False
 		while time.perf_counter() - start < 5.0:
+			flash = not flash
 			self.cw.fill_solid(0, 0, 0)
-			self.highscore_board.draw(self.highscores, self.last_initials, self.score, False)
+			self.highscore_board.draw(self.highscores, self.last_initials, self.score, flash)
 			self.cw.show(sleep_ms=220)
 
 	def reset(self) -> None:

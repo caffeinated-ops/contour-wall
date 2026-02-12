@@ -17,10 +17,12 @@ const games = {
   line: {
     script: 'line.py',
     args: ['--physical', '--camera-index', '0'],
+    supportsPlayerName: true,
   },
   hole: {
     script: 'hole.py',
     args: ['--physical', '--camera-index', '0'],
+    supportsPlayerName: true,
   },
 };
 

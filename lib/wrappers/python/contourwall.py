@@ -68,8 +68,8 @@ class ContourWall:
         # Initialize the pixel array
         self.pixels: np.ndarray = np.zeros((40, 60, 3), dtype=np.uint8)
 
-        # Hardware color order (panel wiring is BGR)
-        self._color_order = "BGR"
+        # Hardware color order (panel wiring is RGB)
+        self._color_order = "RGB"
 
         # Initialize the pushed frames counter
         self.pushed_frames: int = 0
