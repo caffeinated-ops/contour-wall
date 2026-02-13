@@ -36,8 +36,9 @@ WRAPPER_DIR = EXAMPLES_DIR.parent
 if str(WRAPPER_DIR) not in sys.path:
     sys.path.insert(0, str(WRAPPER_DIR))
 
-from contourwall_emulator import ContourWallEmulator
+from contourwall import ContourWall
 from game_input import LEFT_KEYS, RIGHT_KEYS, PhysicalMotionController, normalize_key
+from lives_display import draw_lives
 from highscore_board import HighscoreBoard, highscore_path
 
 
@@ -46,6 +47,7 @@ class PoseController:
         self.show_window = show_window
         if cv is None or mp is None or not hasattr(mp, "solutions"):
             raise RuntimeError("MediaPipe Pose is unavailable.")
+        self.use_cuda = bool(getattr(cv, "cuda", None)) and cv.cuda.getCudaEnabledDeviceCount() > 0
         if sys.platform.startswith("win"):
             self.cap = cv.VideoCapture(camera_index, cv.CAP_DSHOW)
         else:
@@ -60,6 +62,7 @@ class PoseController:
             min_detection_confidence=0.3,
             min_tracking_confidence=0.3,
         )
+        self.gpu_frame = cv.cuda_GpuMat() if self.use_cuda else None
 
     def read_key(self):
         if not self.show_window or cv is None:
@@ -70,8 +73,14 @@ class PoseController:
         ret, frame = self.cap.read()
         if not ret:
             return None
-        frame = cv.flip(frame, 1)
-        rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+        if self.use_cuda:
+            self.gpu_frame.upload(frame)
+            flipped = cv.cuda.flip(self.gpu_frame, 1)
+            rgb = cv.cuda.cvtColor(flipped, cv.COLOR_BGR2RGB).download()
+            frame = rgb[:, :, ::-1]
+        else:
+            frame = cv.flip(frame, 1)
+            rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
         results = self.pose.process(rgb)
         if self.show_window:
             cv.imshow("Camera", frame)
@@ -150,7 +159,7 @@ class BrickBreakerGame:
 
     def __init__(
         self,
-        wall: ContourWallEmulator,
+        wall: ContourWall,
         motion_controller: PhysicalMotionController | None = None,
         player_name: str | None = None,
     ):
@@ -159,7 +168,7 @@ class BrickBreakerGame:
         self.use_physical_input = motion_controller is not None
 
         self.rows, self.cols = wall.pixels.shape[:2]
-        self.paddle_width = max(7, self.cols // 9)
+        self.paddle_width = max(7, (self.cols // 9) + 2)
         self.paddle_row = self.rows - 3
 
         self.paddle_x = 0.0
@@ -348,13 +357,12 @@ class BrickBreakerGame:
                 self._reset_ball()
 
     def _draw_hud(self) -> None:
-        for i in range(self.lives):
-            start = i * 3
-            self.cw.pixels[0, start:start + 2] = (35, 225, 35)
+        draw_lives(self.cw, self.lives, start_row=0, start_col=0, spacing=4)
 
-        level_width = min(self.cols // 2, self.level * 4)
+        level_start = min(self.cols - 1, (self.lives * 4) + 1)
+        level_width = min(max(0, self.cols - level_start), self.level * 4)
         if level_width > 0:
-            self.cw.pixels[1, 0:level_width] = (80, 140, 250)
+            self.cw.pixels[1, level_start:level_start + level_width] = (80, 140, 250)
 
         self.highscore_board.draw_number(
             value=self.score,
@@ -492,7 +500,7 @@ def main() -> None:
     args = parser.parse_args()
 
     random.seed()
-    cw = ContourWallEmulator()
+    cw = ContourWall()
     cw.new_with_ports("COM10", "COM12", "COM9", "COM14", "COM13", "COM11")
 
     motion_controller: PhysicalMotionController | None = None

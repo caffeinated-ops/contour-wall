@@ -65,6 +65,8 @@ class PhysicalMotionController:
             self.cap = cv.VideoCapture(self.camera_index)
         if not self.cap.isOpened():
             raise RuntimeError("Camera failed to open.")
+        self.use_cuda = bool(getattr(cv, "cuda", None)) and cv.cuda.getCudaEnabledDeviceCount() > 0
+        self.gpu_frame = cv.cuda_GpuMat() if self.use_cuda else None
         # Reduce capture latency where backend supports it.
         self.cap.set(cv.CAP_PROP_BUFFERSIZE, 1)
         self.cap.set(cv.CAP_PROP_FPS, 30)
@@ -74,17 +76,17 @@ class PhysicalMotionController:
         self.last_key = -1
         self.last_target_col: int | None = None
         self.last_target_age = 0
-        self.max_target_age = 8
+        self.max_target_age = 12
         self.use_fast_capture = True
         self.capture_failures = 0
-        self.min_contour_area = 260.0
+        self.min_contour_area = 380.0
         self.lock_cx: float | None = None
         self.lock_cy: float | None = None
         self.lock_area: float | None = None
         self.lock_bbox: tuple[float, float, float, float] | None = None
         self.lock_misses = 0
-        self.max_lock_misses = 16
-        self.reacquire_after_misses = 6
+        self.max_lock_misses = 30
+        self.reacquire_after_misses = 12
 
     def read_key(self) -> int:
         if self.show_window:
@@ -153,9 +155,9 @@ class PhysicalMotionController:
 
         def score(item: tuple[float, float, float, np.ndarray, tuple[int, int, int, int]]) -> float:
             cx, cy, area = item[0], item[1], item[2]
-            center_penalty = abs(cx - cx_center) * 1.6
-            lower_bonus = (cy / max(1.0, frame_h)) * 260.0
-            return area + lower_bonus - center_penalty
+            center_penalty = abs(cx - cx_center) * 2.2
+            lower_bonus = (cy / max(1.0, frame_h)) * 300.0
+            return (area * 1.3) + lower_bonus - center_penalty
 
         return max(candidates, key=score)
 
@@ -178,10 +180,10 @@ class PhysicalMotionController:
             return self._select_initial_candidate(candidates, frame_w, frame_h)
 
         miss_factor = min(1.0, self.lock_misses / max(1, self.reacquire_after_misses))
-        max_dist = max(70.0, frame_w * (0.24 + (0.14 * miss_factor)))
-        min_iou_gate = 0.03 - (0.02 * miss_factor)
-        min_area_ratio = max(0.22, 0.40 - (0.12 * miss_factor))
-        max_area_ratio = 2.8 + (1.2 * miss_factor)
+        max_dist = max(60.0, frame_w * (0.18 + (0.10 * miss_factor)))
+        min_iou_gate = 0.08 - (0.03 * miss_factor)
+        min_area_ratio = max(0.35, 0.50 - (0.10 * miss_factor))
+        max_area_ratio = 1.8 + (0.8 * miss_factor)
         best: tuple[float, float, float, np.ndarray, tuple[int, int, int, int]] | None = None
         best_score = 1e9
 
@@ -208,7 +210,7 @@ class PhysicalMotionController:
                 best = (cx, cy, area, contour, bbox)
 
         # Avoid sudden lock jumps to another person, but relax when lock is stale.
-        score_limit = max(120.0, frame_w * (0.20 + (0.12 * miss_factor)))
+        score_limit = max(90.0, frame_w * (0.16 + (0.08 * miss_factor)))
         if best is not None and best_score > score_limit:
             return None
 
@@ -279,9 +281,17 @@ class PhysicalMotionController:
                 self.use_fast_capture = False
             return self._stable_target(None)
         self.capture_failures = 0
-        frame = cv.flip(frame, 1)
-        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-        gray = cv.GaussianBlur(gray, (5, 5), 0)
+        if self.use_cuda:
+            self.gpu_frame.upload(frame)
+            gpu_flipped = cv.cuda.flip(self.gpu_frame, 1)
+            frame = gpu_flipped.download()
+            gpu_gray = cv.cuda.cvtColor(gpu_flipped, cv.COLOR_BGR2GRAY)
+            gpu_gray = cv.cuda.GaussianBlur(gpu_gray, (5, 5), 0)
+            gray = gpu_gray.download()
+        else:
+            frame = cv.flip(frame, 1)
+            gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+            gray = cv.GaussianBlur(gray, (5, 5), 0)
 
         if self.prev_gray is None:
             self.prev_gray = gray

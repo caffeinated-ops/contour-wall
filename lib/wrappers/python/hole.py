@@ -17,7 +17,6 @@ except ImportError:
 
 from game_input import PhysicalMotionController, normalize_key
 from score_display import draw_score
-from game_over_display import draw_game_over
 from lives_display import draw_lives
 from highscore_board import HighscoreBoard, highscore_path
 from countdown_display import show_countdown
@@ -28,6 +27,7 @@ class PoseController:
 		self.show_window = show_window
 		if cv is None or mp is None or not hasattr(mp, "solutions"):
 			raise RuntimeError("MediaPipe Pose is unavailable.")
+		self.use_cuda = bool(getattr(cv, "cuda", None)) and cv.cuda.getCudaEnabledDeviceCount() > 0
 		if sys.platform.startswith("win"):
 			self.cap = cv.VideoCapture(camera_index, cv.CAP_DSHOW)
 		else:
@@ -42,6 +42,7 @@ class PoseController:
 			min_detection_confidence=0.3,
 			min_tracking_confidence=0.3,
 		)
+		self.gpu_frame = cv.cuda_GpuMat() if self.use_cuda else None
 
 	def read_key(self):
 		if not self.show_window or cv is None:
@@ -52,8 +53,14 @@ class PoseController:
 		ret, frame = self.cap.read()
 		if not ret:
 			return None
-		frame = cv.flip(frame, 1)
-		rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+		if self.use_cuda:
+			self.gpu_frame.upload(frame)
+			flipped = cv.cuda.flip(self.gpu_frame, 1)
+			rgb = cv.cuda.cvtColor(flipped, cv.COLOR_BGR2RGB).download()
+			frame = rgb[:, :, ::-1]
+		else:
+			frame = cv.flip(frame, 1)
+			rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
 		results = self.pose.process(rgb)
 		if self.show_window:
 			cv.imshow("Camera", frame)
@@ -183,15 +190,19 @@ def update_particles(particles):
 		particles.remove(particle)
 
 
-def hole_runner(motion_controller=None):
+def hole_runner(motion_controller=None, player_name: str | None = None):
 	rows, cols = cw.pixels.shape[:2]
 
 	EXAMPLES_DIR = Path(__file__).resolve().parent
 	highscore_path_var = highscore_path(EXAMPLES_DIR, "hole_runner")
-	highscores = []
 	highscore_board = HighscoreBoard(rows, cols, cw.pixels)
 	highscores = highscore_board.load(highscore_path_var)
-	last_initials = ""
+	last_initials = (
+		HighscoreBoard.normalize_initials(player_name)
+		if player_name
+		else "YOU"
+	)
+	allow_prompt = not bool(player_name)
 
 	player_row = rows - 2
 	player_col = cols // 2
@@ -236,7 +247,7 @@ def hole_runner(motion_controller=None):
 	# Player trail effect
 	player_trail = []  # List of recent player positions
 
-	show_countdown(3, cw)
+	show_countdown(cw, countdown_items=[5, 4, 3, 2, 1])
 
 	if motion_controller is None:
 		print("Hole runner controls: A/D or Left/Right arrows. Press Q to quit.")
@@ -347,80 +358,32 @@ def hole_runner(motion_controller=None):
 
 		cw.show()
 
-	# Game over screen with animation
-	game_over_start = time.time()
-	animation_frames = 60  # 2 seconds at 30fps
-
-	for frame in range(animation_frames):
-		# Create explosion effect
-		cw.pixels[:] = 0, 0, 0
-
-		# Draw expanding explosion circles
-		center_row, center_col = player_row, player_col
-		radius = frame * 0.5
-
-		if radius > 0:  # Avoid division by zero
-			for r in range(rows):
-				for c in range(cols):
-					distance = math.sqrt((r - center_row)**2 + (c - center_col)**2)
-					if distance <= radius and distance > radius - 1:
-						# Explosion ring colors
-						intensity = 1.0 - (distance / radius)
-						if frame < 20:
-							color = (int(255 * intensity), 0, int(255 * intensity))  # Purple
-						elif frame < 40:
-							color = (int(255 * intensity), int(100 * intensity), int(255 * intensity))  # Purple-pink
-						else:
-							color = (int(128 * intensity), 0, int(128 * intensity))  # Dark purple
-
-						cw.pixels[r, c] = color
-
-		# Draw final score with pulsing effect
-		pulse = math.sin(frame * 0.3) * 0.3 + 0.7
-		score_color = (int(255 * pulse), int(255 * pulse), int(100 * pulse))
-		draw_score(cw.pixels, score, start_row=rows//2 - 3, position='center', color=score_color)
-
-		cw.show()
-		time.sleep(0.033)  # ~30fps
-
-	# Final static game over screen
-	cw.pixels[:] = 0, 0, 0
-	draw_game_over(cw.pixels, score=score)
-	cw.show()
-	time.sleep(2)  # Show final screen for 2 seconds
-
 	print(f"Game over. Score: {score}")
 
 	# Record highscore
-	last_initials, highscores = highscore_board.record(
+	last_initials, highscores = highscore_board.record_and_save(
 		highscores,
 		score,
 		last_initials,
-		path=highscore_path_var,
+		highscore_path_var,
+		allow_prompt=allow_prompt,
 	)
 
-	# Show highscores
-	if highscores:
-		for idx, (name, score_val) in enumerate(highscores[:10], start=1):
-			print(f"{idx}. {name}: {score_val}")
-
+	# Show highscores for 5 seconds, then exit
+	start = time.time()
 	flash = False
-	while True:
+	while time.time() - start < 5.0:
 		flash = not flash
+		cw.fill_solid(0, 0, 0)
 		highscore_board.draw(highscores, last_initials, score, flash)
-		key = cw.show(sleep_ms=500)
-		if key in (27, ord("q"), ord("Q")) or key == -1:
-			return False
-		if key in (ord("r"), ord("R")):
-			return True
-
+		cw.show(sleep_ms=220)
 		if motion_controller is not None:
 			motion_controller.read_target_col(cols)
 			camera_key = normalize_key(motion_controller.read_key())
 			if camera_key in (27, ord("q"), ord("Q")):
 				return False
-			if camera_key in (ord("r"), ord("R")):
-				return True
+
+	return False
 
 
 if __name__ == "__main__":
@@ -441,10 +404,16 @@ if __name__ == "__main__":
 		action="store_true",
 		help="Show webcam debug windows in --physical mode.",
 	)
+	parser.add_argument(
+		"--player-name",
+		type=str,
+		default="",
+		help="Player name to use for highscores.",
+	)
 	args = parser.parse_args()
 
 	cw = ContourWall()
-	cw.new_with_ports("/dev/ttyACM4", "/dev/ttyACM2", "/dev/ttyACM0", "/dev/ttyACM5", "/dev/ttyACM3", "/dev/ttyACM1")
+	cw.new_with_ports("COM10", "COM12", "COM9", "COM14", "COM13", "COM11")
 
 	motion_controller = None
 	if args.physical:
@@ -465,8 +434,12 @@ if __name__ == "__main__":
 				print(f"[INPUT WARN] {inner_exc}")
 				print("[INPUT WARN] Falling back to keyboard input.")
 
+	player_name = args.player_name.strip()
 	try:
-		while hole_runner(motion_controller=motion_controller):
+		while hole_runner(
+			motion_controller=motion_controller,
+			player_name=player_name or None,
+		):
 			pass
 	finally:
 		if motion_controller is not None:

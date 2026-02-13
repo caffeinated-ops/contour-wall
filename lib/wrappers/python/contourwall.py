@@ -68,6 +68,9 @@ class ContourWall:
         # Initialize the pixel array
         self.pixels: np.ndarray = np.zeros((40, 60, 3), dtype=np.uint8)
 
+        # Hardware color order (panel wiring is RGB)
+        self._color_order = "RGB"
+
         # Initialize the pushed frames counter
         self.pushed_frames: int = 0
 
@@ -144,7 +147,15 @@ class ContourWall:
             brightness = max(0, min(brightness, 1))
 
         self.pixels[:] = self.pixels[:] // (1 / brightness)
-        ptr: ctypes._Pointer[c_uint8] = ctypes.cast(ctypes.c_char_p(self.pixels.tobytes()), ctypes.POINTER(ctypes.c_uint8))
+
+        frame = self.pixels
+        if self._color_order == "BGR":
+            frame = self.pixels[..., ::-1]
+
+        ptr: ctypes._Pointer[c_uint8] = ctypes.cast(
+            ctypes.c_char_p(frame.tobytes()),
+            ctypes.POINTER(ctypes.c_uint8),
+        )
         self._update_all(ctypes.byref(self._cw_core), ptr, optimize)
         self._show(ctypes.byref(self._cw_core))
         self.pushed_frames += 1
@@ -162,7 +173,10 @@ class ContourWall:
         This example code will fill the entire ContourWall with the color red and will show the filled ContourWall.
         """
 
-        self._solid_color(ctypes.byref(self._cw_core), r, g, b)
+        if self._color_order == "BGR":
+            self._solid_color(ctypes.byref(self._cw_core), b, g, r)
+        else:
+            self._solid_color(ctypes.byref(self._cw_core), r, g, b)
         self.pixels[:] = r, g, b
 
     def drop(self) -> None:

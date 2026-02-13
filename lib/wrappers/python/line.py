@@ -31,7 +31,7 @@ WRAPPER_DIR = EXAMPLES_DIR.parent
 if str(WRAPPER_DIR) not in sys.path:
 	sys.path.insert(0, str(WRAPPER_DIR))
 
-from contourwall_emulator import ContourWallEmulator
+from contourwall import ContourWall
 from game_input import (
 	LEFT_KEYS,
 	RIGHT_KEYS,
@@ -40,6 +40,7 @@ from game_input import (
 )
 from lives_display import draw_lives
 from score_display import draw_score
+from highscore_board import HighscoreBoard, highscore_path
 
 
 @dataclass
@@ -102,8 +103,9 @@ class LaneStayGame:
 
 	def __init__(
 		self,
-		wall: ContourWallEmulator,
+		wall: ContourWall,
 		motion_controller: PhysicalMotionController | None = None,
+		player_name: str | None = None,
 	):
 		self.cw = wall
 		self.motion_controller = motion_controller
@@ -126,6 +128,34 @@ class LaneStayGame:
 		self.faster_flash_colors = [(255, 255, 0), (0, 255, 255)]
 		self.faster_flash_color_idx = 0
 		self.faster_flash_score = 0
+		self.highscore_path = highscore_path(EXAMPLES_DIR, "line")
+		self.highscores: list[tuple[str, int]] = []
+		self.last_initials = (
+			HighscoreBoard.normalize_initials(player_name)
+			if player_name
+			else "YOU"
+		)
+		self.allow_prompt = not bool(player_name)
+		self.highscore_board = HighscoreBoard(self.rows, self.cols, self.cw.pixels)
+		self.highscores = self.highscore_board.load(self.highscore_path)
+
+	def _record_highscore(self) -> None:
+		self.last_initials, self.highscores = self.highscore_board.record_and_save(
+			self.highscores,
+			self.score,
+			self.last_initials,
+			self.highscore_path,
+			allow_prompt=self.allow_prompt,
+		)
+
+	def _show_highscores(self) -> None:
+		start = time.perf_counter()
+		flash = False
+		while time.perf_counter() - start < 5.0:
+			flash = not flash
+			self.cw.fill_solid(0, 0, 0)
+			self.highscore_board.draw(self.highscores, self.last_initials, self.score, flash)
+			self.cw.show(sleep_ms=220)
 
 	def reset(self) -> None:
 		self.rows, self.cols = self.cw.pixels.shape[:2]
@@ -400,6 +430,8 @@ class LaneStayGame:
 				time.sleep(target_dt - frame_time)
 
 		print(f"Game over. Score: {self.score}")
+		self._record_highscore()
+		self._show_highscores()
 
 
 def main() -> None:
@@ -422,10 +454,16 @@ def main() -> None:
 		action="store_true",
 		help="Show webcam debug windows in --physical mode.",
 	)
+	parser.add_argument(
+		"--player-name",
+		type=str,
+		default="",
+		help="Player name to use for highscores.",
+	)
 	args = parser.parse_args()
 
 	random.seed()
-	cw = ContourWallEmulator()
+	cw = ContourWall()
 	cw.new_with_ports("COM10", "COM12", "COM9", "COM14", "COM13", "COM11")
 
 	motion_controller: PhysicalMotionController | None = None
@@ -439,7 +477,12 @@ def main() -> None:
 			print(f"[INPUT WARN] {exc}")
 			print("[INPUT WARN] Falling back to keyboard input.")
 
-	game = LaneStayGame(cw, motion_controller=motion_controller)
+	player_name = args.player_name.strip()
+	game = LaneStayGame(
+		cw,
+		motion_controller=motion_controller,
+		player_name=player_name or None,
+	)
 
 	try:
 		game.run()

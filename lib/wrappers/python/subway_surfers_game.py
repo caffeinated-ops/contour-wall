@@ -37,7 +37,6 @@ from game_input import LEFT_KEYS, RIGHT_KEYS, PhysicalMotionController, normaliz
 from lives_display import draw_lives
 from score_display import draw_score
 from highscore_board import HighscoreBoard, highscore_path
-from game_over_display import draw_game_over
 
 
 @dataclass
@@ -382,9 +381,7 @@ class SubwaySurfersGame:
             self._set_pixel(r, c, color)
 
     def _draw_hud(self) -> None:
-        for i in range(self.lives):
-            start = i * 3
-            self._fill_rect(0, 1, start, start + 2, (245, 70, 70))
+        draw_lives(self.cw, self.lives, start_row=0, start_col=0, spacing=4)
 
         score_width = min(self.cols, self.score // 110)
         if score_width > 0:
@@ -431,8 +428,14 @@ class SubwaySurfersGame:
         print(
             f"Game over. Score: {self.score}. Distance: {int(self.distance)}."
         )
-        draw_game_over(self.cw.pixels, self.score)
-        self.cw.show(sleep_ms=2000)
+        self._record_highscore()
+        start = time.perf_counter()
+        flash = False
+        while time.perf_counter() - start < 5.0:
+            flash = not flash
+            self.cw.fill_solid(0, 0, 0)
+            self._draw_highscores(flash)
+            self.cw.show(sleep_ms=220)
 
     def run(self) -> int:
         print("Subway Surfers (ContourWall Edition)")
@@ -509,13 +512,7 @@ def main() -> None:
     random.seed()
 
     cw = ContourWall()
-    cw.new_with_ports("/dev/ttyACM4", "/dev/ttyACM2", "/dev/ttyACM0", "/dev/ttyACM5", "/dev/ttyACM3", "/dev/ttyACM1")
-
-    highscore_path_var = highscore_path(EXAMPLES_DIR, "subway_surfers")
-    highscores = []
-    highscore_board = HighscoreBoard(cw.rows, cw.cols, cw.pixels)
-    highscores = highscore_board.load(highscore_path_var)
-    last_initials = ""
+    cw.new_with_ports("COM10", "COM12", "COM9", "COM14", "COM13", "COM11")
 
     motion_controller: PhysicalMotionController | None = None
     if args.physical:

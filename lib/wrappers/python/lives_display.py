@@ -14,7 +14,7 @@ HEART_PATTERN = [
 HEART_WIDTH = 3
 HEART_HEIGHT = 3
 
-def draw_lives(cw, lives: int, start_row: int = 0, start_col: int = 0, spacing: int = 4, color: tuple = (0, 0, 255)):
+def draw_lives(cw, lives: int, start_row: int = 0, start_col: int = 0, spacing: int = 4, color: tuple = (255, 0, 0)):
     """
     Draw lives as hearts on the ContourWall display.
 
