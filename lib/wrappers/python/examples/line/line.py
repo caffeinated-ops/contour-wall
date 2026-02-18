@@ -23,13 +23,14 @@ import time
 import cv2 as cv
 import numpy as np
 
-EXAMPLES_DIR = Path(__file__).resolve().parent
-if str(EXAMPLES_DIR) not in sys.path:
-	sys.path.insert(0, str(EXAMPLES_DIR))
-
+_THIS_DIR = Path(__file__).resolve().parent
+EXAMPLES_DIR = _THIS_DIR.parent
+UTILS_DIR = EXAMPLES_DIR / "utils"
 WRAPPER_DIR = EXAMPLES_DIR.parent
-if str(WRAPPER_DIR) not in sys.path:
-	sys.path.insert(0, str(WRAPPER_DIR))
+
+for _p in (str(WRAPPER_DIR), str(UTILS_DIR)):
+	if _p not in sys.path:
+		sys.path.insert(0, _p)
 
 from contourwall import ContourWall
 from game_input import (

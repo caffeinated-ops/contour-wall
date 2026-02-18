@@ -1,10 +1,20 @@
-from contourwall_emulator import ContourWallEmulator
 import argparse
 import time
 import random
 import math
 import sys
 from pathlib import Path
+
+_THIS_DIR = Path(__file__).resolve().parent
+EXAMPLES_DIR = _THIS_DIR.parent
+UTILS_DIR = EXAMPLES_DIR / "utils"
+WRAPPER_DIR = EXAMPLES_DIR.parent
+
+for _p in (str(WRAPPER_DIR), str(UTILS_DIR)):
+	if _p not in sys.path:
+		sys.path.insert(0, _p)
+
+from contourwall_emulator import ContourWallEmulator
 
 try:
 	import cv2 as cv

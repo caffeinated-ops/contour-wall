@@ -28,15 +28,16 @@ try:
 except ImportError:
     mp = None
 
-EXAMPLES_DIR = Path(__file__).resolve().parent
-if str(EXAMPLES_DIR) not in sys.path:
-    sys.path.insert(0, str(EXAMPLES_DIR))
-
+_THIS_DIR = Path(__file__).resolve().parent
+EXAMPLES_DIR = _THIS_DIR.parent
+UTILS_DIR = EXAMPLES_DIR / "utils"
 WRAPPER_DIR = EXAMPLES_DIR.parent
-if str(WRAPPER_DIR) not in sys.path:
-    sys.path.insert(0, str(WRAPPER_DIR))
 
-from contourwall import ContourWall
+for _p in (str(WRAPPER_DIR), str(UTILS_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from contourwall_emulator import ContourWallEmulator
 from game_input import LEFT_KEYS, RIGHT_KEYS, PhysicalMotionController, normalize_key
 from lives_display import draw_lives
 from highscore_board import HighscoreBoard, highscore_path
@@ -159,7 +160,7 @@ class BrickBreakerGame:
 
     def __init__(
         self,
-        wall: ContourWall,
+        wall: ContourWallEmulator,
         motion_controller: PhysicalMotionController | None = None,
         player_name: str | None = None,
     ):
@@ -500,8 +501,8 @@ def main() -> None:
     args = parser.parse_args()
 
     random.seed()
-    cw = ContourWall()
-    cw.new_with_ports("COM10", "COM12", "COM9", "COM14", "COM13", "COM11")
+    cw = ContourWallEmulator()
+    cw.new()
 
     motion_controller: PhysicalMotionController | None = None
     if args.physical:
