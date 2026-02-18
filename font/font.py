@@ -1,19 +1,12 @@
 import numpy as np
 import os
-from pathlib import Path
 
 character_index = {}
 
-def load_character_index(font_dir=None):
-    if font_dir is None:
-        # Default to font directory relative to this script
-        font_dir = Path(__file__).parent
-    else:
-        font_dir = Path(font_dir)
-    
-    files = [f for f in os.listdir(font_dir) if f.endswith(".csv")]
+def load_character_index():
+    files = [f for f in os.listdir("./font/") if f[-4:] == ".csv"]
     for file in files:
-        data = open(font_dir / file, "r").read()
+        data = open(f"./font/{file}", "r").read()
         data = [[[255., 255., 255.] if c == '1' else [0., 0., 0.] for c in line.split(',')] for line in data.split("\n")]
         character_index[chr(int(file[5:-4]))] = (np.array(data), len(data[0]), len(data))
 
